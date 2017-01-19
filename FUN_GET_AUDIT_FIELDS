@@ -1,0 +1,145 @@
+create or replace TYPE OBJ_AUDIT_FIELDS FORCE AS OBJECT(
+  CAMPO VARCHAR2(4000 CHAR)
+  , NEW_VAL VARCHAR2(4000 CHAR)
+  , OLD_VAL VARCHAR2(4000 CHAR)
+);
+/
+
+create or replace TYPE TYPE_AUDIT_FIELDS AS TABLE OF OBJ_AUDIT_FIELDS;
+/
+
+CREATE OR REPLACE FUNCTION FUN_GET_AUDIT_FIELDS(P_AUDIT IN VARCHAR2)
+RETURN TYPE_AUDIT_FIELDS PIPELINED
+AS
+V_LOG VARCHAR2(20000 CHAR);
+V_REST VARCHAR2(20000 CHAR);
+V_DATA VARCHAR2(20000 CHAR);
+V_EXT VARCHAR2(20000 CHAR);
+v_data_ext VARCHAR2(20000 CHAR);
+V_FIELDS VARCHAR2(20000 CHAR);
+V_TIPO_FIELD VARCHAR2(1 CHAR);
+V_CANTIDAD_FIELDS NUMBER(38);
+V_LENGTH_FIELD NUMBER(38);
+P_2 NUMBER(38);
+P_A NUMBER(38);
+
+TYPE r_data IS RECORD (
+  campo varchar2(4000 char)
+  , new_val varchar2(4000 char)
+  , old_val varchar2(4000 char)
+);
+
+TYPE t_data IS TABLE OF r_data INDEX BY varchar2(10 char);
+b_data t_data;
+
+TYPE T_TABLE IS VARRAY(255) OF NUMBER(38);
+V_POS T_TABLE := T_TABLE();
+
+V_A T_TABLE := T_TABLE();
+
+V_OUT OBJ_AUDIT_FIELDS := OBJ_AUDIT_FIELDS(NULL,NULL,NULL);
+
+BEGIN
+  DBMS_OUTPUT.ENABLE(NULL);
+  EXECUTE IMMEDIATE 'ALTER SESSION SET CURSOR_SHARING=FORCE';
+  
+  V_LOG := P_AUDIT;
+  /*BEGIN
+    SELECT audit_log
+    INTO V_LOG
+    FROM siebel.s_audit_item A
+    WHERE A.BUSCOMP_NAME='Contact' AND A.OPERATION_CD='Modify' AND TO_CHAR(A.CREATED,'YYYYMMDD') >= '20160812'
+    AND A.RECORD_ID = '' AND ROWNUM = 1;
+  END;*/
+
+  DBMS_OUTPUT.PUT_LINE(V_LOG||CHR(13));
+  
+  V_REST := V_LOG;
+  
+  <<OBJECTS_LOOP>>
+  LOOP
+    P_2 := INSTR(V_REST, '2*');
+    EXIT OBJECTS_LOOP WHEN P_2 = 0;
+    V_POS.EXTEND(1);
+    V_POS(V_POS.LAST) := P_2;
+    
+    V_REST := SUBSTR(V_REST, P_2+2);
+    
+    IF INSTR(V_REST, '2*') <> 0 THEN
+      v_data := SUBSTR(V_REST, 1, INSTR(V_REST, '2*')-1);
+    ELSE
+      v_data  := V_REST;
+    END IF;
+    
+    V_TIPO_FIELD := SUBSTR(V_DATA,1,1);
+    begin
+    V_CANTIDAD_FIELDS := SUBSTR(V_DATA,2,1);
+    exception when others then
+      DBMS_OUTPUT.PUT_LINE(V_LOG);
+      continue OBJECTS_LOOP;
+    end;
+    
+    DBMS_OUTPUT.PUT_LINE(CHR(10)||V_POS.LAST||' -> '||V_DATA);
+    DBMS_OUTPUT.PUT_LINE(V_TIPO_FIELD||';'||V_CANTIDAD_FIELDS);
+    DBMS_OUTPUT.PUT_LINE(SUBSTR(V_DATA, 3));
+    
+    V_EXT := SUBSTR(V_DATA, 3);
+    
+    FOR I IN 1 .. V_CANTIDAD_FIELDS LOOP
+    
+      --DBMS_OUTPUT.PUT_LINE('CAMPO:'||I||';'||V_EXT);
+      
+      P_A := INSTR(V_EXT, '*');
+      
+      begin
+      V_LENGTH_FIELD := SUBSTR(V_EXT, 1, P_A-1);
+      exception when others then
+      DBMS_OUTPUT.PUT_LINE(V_LOG);
+      continue OBJECTS_LOOP;
+    end;
+      
+      IF V_LENGTH_FIELD = 0 THEN 
+        v_data_ext := '';
+      ELSE
+        v_data_ext := SUBSTR(V_EXT, P_A+1, V_LENGTH_FIELD);
+      END IF;
+      
+      DBMS_OUTPUT.PUT_LINE(P_A||';'||V_LENGTH_FIELD||';'||v_data_ext);
+      
+      IF (V_TIPO_FIELD = 'C') THEN
+        b_data(i).campo := v_data_ext;
+      ELSIF (V_TIPO_FIELD = 'N') THEN
+        b_data(i).new_val := v_data_ext;
+      ELSIF (V_TIPO_FIELD = 'O') THEN
+        b_data(i).old_val := v_data_ext;
+      ELSE
+        NULL;
+      END IF;
+      
+      IF ( I < V_CANTIDAD_FIELDS) THEN
+        V_EXT := SUBSTR(V_EXT, P_A+V_LENGTH_FIELD+1);
+      END IF;
+      
+    END LOOP; 
+    
+  END LOOP OBJECTS_LOOP;
+  
+  IF (b_data.COUNT <> 0) THEN 
+  FOR I IN b_data.FIRST .. b_data.LAST LOOP
+    DBMS_OUTPUT.PUT_LINE( b_data(i).campo||';'||b_data(i).new_val||';'||b_data(i).old_val );
+    
+    V_OUT.CAMPO := b_data(i).campo;
+    V_OUT.NEW_VAL := b_data(i).new_val;
+    V_OUT.OLD_VAL := b_data(i).old_val;
+    
+    --V_OUT := OBJ_AUDIT_FIELDS(b_data(i).campo,b_data(i).new_val,b_data(i).old_val);
+    
+    PIPE ROW(V_OUT);
+    
+  END LOOP;
+  END IF;
+  
+  EXECUTE IMMEDIATE 'ALTER SESSION SET CURSOR_SHARING=EXACT';
+  RETURN;
+END;
+/
